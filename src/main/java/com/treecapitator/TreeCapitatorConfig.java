@@ -23,7 +23,7 @@ public final class TreeCapitatorConfig {
     public static final boolean DEFAULT_INCLUDE_MUSHROOMS = true;
     public static final boolean DEFAULT_BREAK_MUSHROOM_CAPS = true;
     public static final boolean DEFAULT_ALLOW_DIAGONAL = true;
-    public static final double DEFAULT_BREAK_TIME_PER_LOG = 0.05D;
+    public static final double DEFAULT_BREAK_TIME_PER_LOG = 0.5D;
     public static final double DEFAULT_MAX_BREAK_TIME_MULTIPLIER = 8.0D;
 
     public static volatile int maxLogs = DEFAULT_MAX_LOGS;
@@ -74,8 +74,8 @@ public final class TreeCapitatorConfig {
             allow-diagonal=true
 
             # Extra server-side breaking time per additional trunk block. A value of
-            # 0.05 means a 100-log tree takes about 5.95 times as long to start.
-            break-time-per-log=0.05
+            # 0.5 means a 3-log tree takes about 2 times as long to start.
+            break-time-per-log=0.5
 
             # Upper bound for the extra breaking time multiplier.
             max-break-time-multiplier=8.0
