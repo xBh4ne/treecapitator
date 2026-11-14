@@ -1,0 +1,23 @@
+# Gradle
+.gradle/
+build/
+bin/
+
+# Local test server and runtime directories
+server/
+run/
+world/
+logs/
+*.log
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS files
+.DS_Store
+Thumbs.db

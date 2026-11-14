@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "treecapitator",
+  "version": "${version}",
+  "name": "TreeCapitator",
+  "description": "Fells an entire connected tree, or giant mushroom, when a player breaks its trunk with an axe.",
+  "authors": [
+    "Jason"
+  ],
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "com.treecapitator.TreeCapitatorMod"
+    ]
+  },
+  "mixins": [
+    "treecapitator.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.20.1",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": ">=0.165.2"
+  }
+}
