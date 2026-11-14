@@ -33,16 +33,9 @@ All commands are available to every player. No operator permission is required.
 | --- | --- |
 | `/treecapitator` | Shows the current state. |
 | `/treecapitator status` | Shows whether TreeCapitator is enabled for the player. |
-| `/treecapitator on` | Enables the mod for the player. |
-| `/treecapitator off` | Disables the mod for the player. |
 | `/treecapitator toggle` | Toggles the mod for the player. |
-| `/treecapitator me status` | Shows whether TreeCapitator is enabled for the player. |
-| `/treecapitator me on` | Enables the mod for the player. |
-| `/treecapitator me off` | Disables the mod for the player. |
-| `/treecapitator me toggle` | Toggles the mod for the player. |
 
-All commands are available to every player. No operator permission is required. The commands act on
-the executing player.
+All commands act on the executing player.
 
 The default state is enabled for all players.
 
