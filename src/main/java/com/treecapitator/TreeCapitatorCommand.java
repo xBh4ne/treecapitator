@@ -20,6 +20,16 @@ public final class TreeCapitatorCommand {
     public static void register() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
                 dispatcher.register(Commands.literal("treecapitator")
+                        .then(Commands.literal("me")
+                                .then(Commands.literal("on")
+                                        .executes(context -> setEnabled(context, true)))
+                                .then(Commands.literal("off")
+                                        .executes(context -> setEnabled(context, false)))
+                                .then(Commands.literal("toggle")
+                                        .executes(TreeCapitatorCommand::toggle))
+                                .then(Commands.literal("status")
+                                        .executes(TreeCapitatorCommand::status))
+                                .executes(TreeCapitatorCommand::status))
                         .then(Commands.literal("on")
                                 .executes(context -> setEnabled(context, true)))
                         .then(Commands.literal("off")
