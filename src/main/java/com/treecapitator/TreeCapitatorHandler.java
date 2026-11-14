@@ -1,6 +1,8 @@
 package com.treecapitator;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -109,35 +111,52 @@ public final class TreeCapitatorHandler {
     }
 
     private static boolean fellTrunks(ServerPlayer player, ServerLevel level, TreePlan plan) {
+        List<BlockPos> trunkPositions = new ArrayList<>();
         for (BlockPos pos : plan.trunk()) {
-            if (pos.equals(plan.origin())) {
-                continue;
-            }
-            if (!player.isAlive() || player.isSpectator()) {
-                return false;
-            }
-
-            ItemStack tool = player.getMainHandItem();
-            if (tool.isEmpty()) {
-                return false;
-            }
-            if (TreeCapitatorConfig.requireAxe && !tool.is(ItemTags.AXES)) {
-                return false;
-            }
-
-            BlockState current = level.getBlockState(pos);
-            if (!TreeScanner.isTrunk(current, plan.kind())) {
-                continue;
-            }
-            if (!level.mayInteract(player, pos)) {
-                return false;
-            }
-            if (!player.gameMode.destroyBlock(pos)) {
-                return false;
+            if (!pos.equals(plan.origin())) {
+                trunkPositions.add(pos);
             }
         }
 
-        return true;
+        return fellTrunksFrom(player, level, plan, trunkPositions, 0);
+    }
+
+    private static boolean fellTrunksFrom(ServerPlayer player, ServerLevel level, TreePlan plan,
+            List<BlockPos> trunkPositions, int index) {
+        if (index >= trunkPositions.size()) {
+            return true;
+        }
+
+        BlockPos pos = trunkPositions.get(index);
+        if (!player.isAlive() || player.isSpectator()) {
+            return false;
+        }
+
+        ItemStack tool = player.getMainHandItem();
+        if (tool.isEmpty()) {
+            return false;
+        }
+        if (TreeCapitatorConfig.requireAxe && !tool.is(ItemTags.AXES)) {
+            return false;
+        }
+
+        BlockState current = level.getBlockState(pos);
+        if (!TreeScanner.isTrunk(current, plan.kind())) {
+            return fellTrunksFrom(player, level, plan, trunkPositions, index + 1);
+        }
+        if (!level.mayInteract(player, pos)) {
+            return false;
+        }
+        if (!player.gameMode.destroyBlock(pos)) {
+            return false;
+        }
+
+        if (index + 1 < trunkPositions.size() && TreeCapitatorConfig.breakDelayMs > 0) {
+            level.getServer().execute(() -> fellTrunksFrom(player, level, plan, trunkPositions, index + 1));
+            return true;
+        }
+
+        return fellTrunksFrom(player, level, plan, trunkPositions, index + 1);
     }
 
     private static void breakFoliage(ServerPlayer player, ServerLevel level, TreePlan plan) {

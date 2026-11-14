@@ -25,6 +25,7 @@ public final class TreeCapitatorConfig {
     public static final boolean DEFAULT_ALLOW_DIAGONAL = true;
     public static final double DEFAULT_BREAK_TIME_PER_LOG = 1.0D;
     public static final double DEFAULT_MAX_BREAK_TIME_MULTIPLIER = 16.0D;
+    public static final int DEFAULT_BREAK_DELAY_MS = 0;
 
     public static volatile int maxLogs = DEFAULT_MAX_LOGS;
     public static volatile boolean requireAxe = DEFAULT_REQUIRE_AXE;
@@ -37,6 +38,7 @@ public final class TreeCapitatorConfig {
     public static volatile boolean allowDiagonal = DEFAULT_ALLOW_DIAGONAL;
     public static volatile double breakTimePerLog = DEFAULT_BREAK_TIME_PER_LOG;
     public static volatile double maxBreakTimeMultiplier = DEFAULT_MAX_BREAK_TIME_MULTIPLIER;
+    public static volatile int breakDelayMs = DEFAULT_BREAK_DELAY_MS;
 
     private static final String FILE_NAME = "treecapitator.properties";
     private static final String DEFAULT_FILE = """
@@ -79,6 +81,9 @@ public final class TreeCapitatorConfig {
 
             # Upper bound for the extra breaking time multiplier.
             max-break-time-multiplier=16.0
+
+            # Milliseconds to wait between sequential trunk breaks during felling.
+            break-delay-ms=0
             """;
 
     private TreeCapitatorConfig() {
@@ -116,6 +121,7 @@ public final class TreeCapitatorConfig {
         breakTimePerLog = readDouble(properties, "break-time-per-log", DEFAULT_BREAK_TIME_PER_LOG, 0.0D, 10.0D);
         maxBreakTimeMultiplier = readDouble(properties, "max-break-time-multiplier",
                 DEFAULT_MAX_BREAK_TIME_MULTIPLIER, 1.0D, 100.0D);
+        breakDelayMs = readInt(properties, "break-delay-ms", DEFAULT_BREAK_DELAY_MS, 0, 60000);
     }
 
     private static void applyDefaults() {
@@ -130,6 +136,7 @@ public final class TreeCapitatorConfig {
         allowDiagonal = DEFAULT_ALLOW_DIAGONAL;
         breakTimePerLog = DEFAULT_BREAK_TIME_PER_LOG;
         maxBreakTimeMultiplier = DEFAULT_MAX_BREAK_TIME_MULTIPLIER;
+        breakDelayMs = DEFAULT_BREAK_DELAY_MS;
     }
 
     private static int readInt(Properties properties, String key, int defaultValue, int minimum, int maximum) {

@@ -60,6 +60,7 @@ are ignored.
 | `allow-diagonal` | `true` | When true, trunk blocks that are connected by edge or corner neighbours are treated as one tree. |
 | `break-time-per-log` | `1.0` | Server-side extra breaking time per additional trunk block. |
 | `max-break-time-multiplier` | `16.0` | Upper bound for the total server-side breaking time multiplier. |
+| `break-delay-ms` | `0` | Milliseconds to wait between sequential trunk breaks during felling. |
 
 Invalid values are replaced by the defaults and a warning is written to the server log.
 
@@ -106,6 +107,9 @@ vanilla creative behavior.
 The breaking time of the block that starts the felling is multiplied by the size of the tree. The
 extra time is calculated from `break-time-per-log` and capped by `max-break-time-multiplier`.
 With the default value, a tree made of three logs takes three times as long to break as a single log.
+
+Additional trunk blocks are then broken one at a time, waiting `break-delay-ms` milliseconds
+between consecutive breaks. The default value of `0` breaks them back to back.
 
 ### Leaves and mushrooms
 
