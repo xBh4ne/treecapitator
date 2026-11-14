@@ -58,8 +58,8 @@ are ignored.
 | `include-mushrooms` | `true` | When true, giant mushroom stems are treated like trunks. |
 | `break-mushroom-caps` | `true` | When true, connected mushroom caps are removed when a mushroom is felled. Vanilla mushrooms do not decay naturally, so this defaults to true. |
 | `allow-diagonal` | `true` | When true, trunk blocks that are connected by edge or corner neighbours are treated as one tree. |
-| `break-time-per-log` | `0.5` | Server-side extra breaking time per additional trunk block. |
-| `max-break-time-multiplier` | `8.0` | Upper bound for the total server-side breaking time multiplier. |
+| `break-time-per-log` | `1.0` | Server-side extra breaking time per additional trunk block. |
+| `max-break-time-multiplier` | `16.0` | Upper bound for the total server-side breaking time multiplier. |
 
 Invalid values are replaced by the defaults and a warning is written to the server log.
 
@@ -105,7 +105,7 @@ vanilla creative behavior.
 
 The breaking time of the block that starts the felling is multiplied by the size of the tree. The
 extra time is calculated from `break-time-per-log` and capped by `max-break-time-multiplier`.
-With the default value, a tree made of three logs takes twice as long to break as a single log.
+With the default value, a tree made of three logs takes three times as long to break as a single log.
 
 ### Leaves and mushrooms
 
