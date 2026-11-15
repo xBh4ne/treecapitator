@@ -13,6 +13,7 @@ public final class TreeCapitatorMod implements ModInitializer {
     public void onInitialize() {
         TreeCapitatorConfig.load();
         TreeCapitatorCommand.register();
+        TreeCapitatorHandler.register();
         PlayerBlockBreakEvents.AFTER.register(TreeCapitatorHandler::afterBlockBreak);
         LOGGER.info("TreeCapitator 1.0.0 loaded.");
     }
