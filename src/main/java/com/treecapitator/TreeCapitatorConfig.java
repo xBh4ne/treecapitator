@@ -23,8 +23,6 @@ public final class TreeCapitatorConfig {
     public static final boolean DEFAULT_INCLUDE_MUSHROOMS = true;
     public static final boolean DEFAULT_BREAK_MUSHROOM_CAPS = true;
     public static final boolean DEFAULT_ALLOW_DIAGONAL = true;
-    public static final double DEFAULT_BREAK_TIME_PER_LOG = 1.0D;
-    public static final double DEFAULT_MAX_BREAK_TIME_MULTIPLIER = 16.0D;
     public static final int DEFAULT_BREAK_DELAY_MS = 0;
 
     public static volatile int maxLogs = DEFAULT_MAX_LOGS;
@@ -36,8 +34,6 @@ public final class TreeCapitatorConfig {
     public static volatile boolean includeMushrooms = DEFAULT_INCLUDE_MUSHROOMS;
     public static volatile boolean breakMushroomCaps = DEFAULT_BREAK_MUSHROOM_CAPS;
     public static volatile boolean allowDiagonal = DEFAULT_ALLOW_DIAGONAL;
-    public static volatile double breakTimePerLog = DEFAULT_BREAK_TIME_PER_LOG;
-    public static volatile double maxBreakTimeMultiplier = DEFAULT_MAX_BREAK_TIME_MULTIPLIER;
     public static volatile int breakDelayMs = DEFAULT_BREAK_DELAY_MS;
 
     private static final String FILE_NAME = "treecapitator.properties";
@@ -75,13 +71,6 @@ public final class TreeCapitatorConfig {
             # This supports trees whose trunk blocks do not share a face.
             allow-diagonal=true
 
-            # Extra server-side breaking time per additional trunk block. A value of
-            # 1.0 means a 3-log tree takes about 3 times as long to start.
-            break-time-per-log=1.0
-
-            # Upper bound for the extra breaking time multiplier.
-            max-break-time-multiplier=16.0
-
             # Milliseconds to wait between sequential trunk breaks during felling.
             break-delay-ms=0
             """;
@@ -118,9 +107,6 @@ public final class TreeCapitatorConfig {
         includeMushrooms = readBoolean(properties, "include-mushrooms", DEFAULT_INCLUDE_MUSHROOMS);
         breakMushroomCaps = readBoolean(properties, "break-mushroom-caps", DEFAULT_BREAK_MUSHROOM_CAPS);
         allowDiagonal = readBoolean(properties, "allow-diagonal", DEFAULT_ALLOW_DIAGONAL);
-        breakTimePerLog = readDouble(properties, "break-time-per-log", DEFAULT_BREAK_TIME_PER_LOG, 0.0D, 10.0D);
-        maxBreakTimeMultiplier = readDouble(properties, "max-break-time-multiplier",
-                DEFAULT_MAX_BREAK_TIME_MULTIPLIER, 1.0D, 100.0D);
         breakDelayMs = readInt(properties, "break-delay-ms", DEFAULT_BREAK_DELAY_MS, 0, 60000);
     }
 
@@ -134,8 +120,6 @@ public final class TreeCapitatorConfig {
         includeMushrooms = DEFAULT_INCLUDE_MUSHROOMS;
         breakMushroomCaps = DEFAULT_BREAK_MUSHROOM_CAPS;
         allowDiagonal = DEFAULT_ALLOW_DIAGONAL;
-        breakTimePerLog = DEFAULT_BREAK_TIME_PER_LOG;
-        maxBreakTimeMultiplier = DEFAULT_MAX_BREAK_TIME_MULTIPLIER;
         breakDelayMs = DEFAULT_BREAK_DELAY_MS;
     }
 
@@ -154,27 +138,6 @@ public final class TreeCapitatorConfig {
             return value;
         } catch (NumberFormatException exception) {
             warnInvalid(key, raw, defaultValue, "expected an integer");
-            return defaultValue;
-        }
-    }
-
-    private static double readDouble(Properties properties, String key, double defaultValue,
-            double minimum, double maximum) {
-        String raw = properties.getProperty(key);
-        if (raw == null) {
-            return defaultValue;
-        }
-
-        try {
-            double value = Double.parseDouble(raw.trim());
-            if (!Double.isFinite(value) || value < minimum || value > maximum) {
-                warnInvalid(key, raw, defaultValue,
-                        "expected a number between " + minimum + " and " + maximum);
-                return defaultValue;
-            }
-            return value;
-        } catch (NumberFormatException exception) {
-            warnInvalid(key, raw, defaultValue, "expected a number");
             return defaultValue;
         }
     }
