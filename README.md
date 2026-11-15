@@ -1,9 +1,8 @@
 # TreeCapitator
 
-TreeCapitator is a Fabric server-side mod for Minecraft 26.3. When a player breaks a
-wooden log trunk with an axe, the connected tree is felled. The remaining trunk blocks are
-removed, the vanilla loot tables are respected, and the axe consumes durability for every
-additional log.
+TreeCapitator is a Fabric server-side mod for Minecraft 26.3. When a player breaks a wooden log
+trunk with an axe, the connected tree is felled. The remaining trunk blocks are removed, the
+vanilla loot tables are respected, and the axe consumes durability for every additional log.
 
 The mod also handles giant mushrooms: a felled mushroom stem removes the connected mushroom
 structure instead of leaving floating caps behind.
@@ -22,8 +21,9 @@ structure instead of leaving floating caps behind.
    `config/treecapitator.properties`.
 3. Restart the server if an existing configuration file is present.
 
-The mod only runs on the server. It has no client entrypoint and does not replace any vanilla
-behavior on the client.
+The mod only runs on the server. It has no client entrypoint, no mixins and no custom packets, so
+vanilla clients work without installing anything. The first block is broken at the normal vanilla
+speed; the rest of the tree is then felled by the server.
 
 ## Commands
 
@@ -58,8 +58,6 @@ are ignored.
 | `include-mushrooms` | `true` | When true, giant mushroom stems are treated like trunks. |
 | `break-mushroom-caps` | `true` | When true, connected mushroom caps are removed when a mushroom is felled. Vanilla mushrooms do not decay naturally, so this defaults to true. |
 | `allow-diagonal` | `true` | When true, trunk blocks that are connected by edge or corner neighbours are treated as one tree. |
-| `break-time-per-log` | `1.0` | Server-side extra breaking time per additional trunk block. |
-| `max-break-time-multiplier` | `16.0` | Upper bound for the total server-side breaking time multiplier. |
 | `break-delay-ms` | `0` | Milliseconds to wait between sequential trunk breaks during felling. |
 
 Invalid values are replaced by the defaults and a warning is written to the server log.
@@ -104,12 +102,13 @@ vanilla creative behavior.
 
 ### Breaking time
 
-The breaking time of the block that starts the felling is multiplied by the size of the tree. The
-extra time is calculated from `break-time-per-log` and capped by `max-break-time-multiplier`.
-With the default value, a tree made of three logs takes three times as long to break as a single log.
+The first block is broken by vanilla at the normal vanilla speed. The mod does not change the
+hardness of any block, so no client-side mod is required.
 
-Additional trunk blocks are then broken one at a time, waiting `break-delay-ms` milliseconds
-between consecutive breaks. The default value of `0` breaks them back to back.
+Additional trunk blocks are then broken one at a time, with at least one server tick between
+consecutive breaks. `break-delay-ms` adds further delay between them; the default value of `0`
+breaks them back to back on consecutive ticks. The per-tick pacing keeps very large trees from
+being removed in a single server tick.
 
 ### Leaves and mushrooms
 
@@ -128,9 +127,10 @@ The mod does not send chat messages except for command feedback and failures.
 
 ## Implementation notes
 
-The server block break is intercepted before the destruction starts and after it succeeds. The
-server-side destroy progress is adjusted through a mixin so the first block of the felling takes
-longer as the tree grows.
+The server listens to the vanilla block break event. After the first block is destroyed, the
+connected trunk is scanned and the remaining logs are queued in a per-tick step queue, so a large
+tree is removed gradually instead of all at once. Each queued break goes through the standard
+server block destruction path.
 
 ## Limitations
 
@@ -139,6 +139,7 @@ longer as the tree grows.
 - Protection systems that cancel block break events are respected.
 - Diagonal connectivity is a structural approximation and very large custom-built structures may
   require a higher `max-logs` or `min-leaves` value.
+- The first block always breaks at the vanilla speed: the mod does not change block hardness.
 
 ## License
 
