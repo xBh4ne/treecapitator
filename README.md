@@ -118,6 +118,9 @@ By default, normal leaves are left to decay naturally after the trunk is removed
 Giant mushrooms are handled separately. When `include-mushrooms` is enabled and
 `break-mushroom-caps` is enabled, the caps of a felled mushroom are removed as well.
 
+Leaves and caps are removed in batches of up to 128 blocks per tick, so a very large canopy does
+not cause a single-tick spike.
+
 ## Messages
 
 Messages shown to players are written in Italian. The mod logs configuration warnings in English
@@ -131,6 +134,18 @@ The server listens to the vanilla block break event. After the first block is de
 connected trunk is scanned and the remaining logs are queued in a per-tick step queue, so a large
 tree is removed gradually instead of all at once. Each queued break goes through the standard
 server block destruction path.
+
+The implementation is written to stay cheap on a busy server:
+
+- The break event returns after a handful of field and tag checks for blocks that cannot start a
+  felling, before touching the world or the per-player preferences file.
+- The scan tracks block positions as packed `long` values in primitive hash sets and lists, and
+  reuses a single mutable position for world lookups. It allocates nothing per visited neighbour
+  and reads each candidate block state once.
+- Scanning stops early when the tree is too large, when it has no canopy, or when a felling cannot
+  happen anyway, so foliage is only materialised and sorted when it will be used.
+- One small job object per tree holds the plan and its cursors. There is no scheduled task or
+  lambda per block, and the tick handler is a plain FIFO queue that exits immediately when idle.
 
 ## Limitations
 

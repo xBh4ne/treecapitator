@@ -1,11 +1,11 @@
 package com.treecapitator;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashSet;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Set;
+
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -20,9 +20,15 @@ import net.minecraft.world.level.block.state.BlockState;
  * <p>The trunk search uses face neighbours by default and also edge/corner
  * neighbours when {@code allow-diagonal} is enabled. Foliage is searched from
  * blocks touching the trunk, so unrelated leaf structures are not collected.</p>
+ *
+ * <p>Positions are tracked as packed {@code long} values in primitive hash sets
+ * and lists, and a single reusable {@link BlockPos.MutableBlockPos} is used for
+ * every world lookup. Scanning therefore allocates no objects per visited
+ * neighbour and reads each candidate block state exactly once.</p>
  */
 public final class TreeScanner {
     private static final int MAX_FOLIAGE = 4096;
+    private static final BlockPos[] NO_POSITIONS = new BlockPos[0];
     private static final int[][] FACE_NEIGHBOURS = buildNeighbours(false);
     private static final int[][] ALL_NEIGHBOURS = buildNeighbours(true);
 
@@ -67,131 +73,163 @@ public final class TreeScanner {
         return false;
     }
 
-    public static TreePlan scan(ServerLevel level, BlockPos origin, BlockState originState) {
-        TreeKind kind = kindOf(originState);
+    public static TreePlan scan(ServerLevel level, BlockPos origin, BlockState originState, TreeKind kind) {
         if (kind == null) {
             return null;
         }
 
         BlockPos immutableOrigin = origin.immutable();
+        long originKey = immutableOrigin.asLong();
         int[][] neighbours = TreeCapitatorConfig.allowDiagonal ? ALL_NEIGHBOURS : FACE_NEIGHBOURS;
-        Set<BlockPos> visited = new HashSet<>();
-        List<BlockPos> trunk = new ArrayList<>();
-        ArrayDeque<BlockPos> queue = new ArrayDeque<>();
+        int maxLogs = TreeCapitatorConfig.maxLogs;
 
-        visited.add(immutableOrigin);
-        queue.add(immutableOrigin);
+        LongOpenHashSet visited = new LongOpenHashSet();
+        LongArrayList trunkKeys = new LongArrayList();
+        LongArrayList queue = new LongArrayList();
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
 
-        while (!queue.isEmpty()) {
-            BlockPos pos = queue.poll();
-            BlockState state = pos.equals(immutableOrigin) ? originState : getState(level, pos);
+        visited.add(originKey);
+        queue.add(originKey);
 
-            if (state == null || !isTrunk(state, kind)) {
+        // Breadth-first search over packed positions; 'queue' doubles as the
+        // visited work list, so no iterator or per-node object is allocated.
+        for (int head = 0; head < queue.size(); head++) {
+            long key = queue.getLong(head);
+            BlockState state = key == originKey ? originState : level.getBlockState(cursor.set(key));
+
+            if (!isTrunk(state, kind)) {
                 continue;
             }
 
-            trunk.add(pos.immutable());
-            if (trunk.size() > TreeCapitatorConfig.maxLogs) {
-                return new TreePlan(kind, immutableOrigin, List.copyOf(trunk), List.of(), false, true);
+            trunkKeys.add(key);
+            if (trunkKeys.size() > maxLogs) {
+                return new TreePlan(kind, immutableOrigin, NO_POSITIONS, NO_POSITIONS, false, true);
             }
 
+            int x = BlockPos.getX(key);
+            int y = BlockPos.getY(key);
+            int z = BlockPos.getZ(key);
             for (int[] offset : neighbours) {
-                BlockPos next = pos.offset(offset[0], offset[1], offset[2]);
-                if (visited.add(next)) {
-                    queue.add(next);
+                long nextKey = cursor.set(x + offset[0], y + offset[1], z + offset[2]).asLong();
+                if (visited.add(nextKey)) {
+                    queue.add(nextKey);
                 }
             }
         }
 
-        trunk.sort(Comparator.comparingInt((BlockPos pos) -> pos.getY())
-                .thenComparingInt((BlockPos pos) -> pos.getX())
-                .thenComparingInt((BlockPos pos) -> pos.getZ()));
-
-        if (trunk.size() <= 1) {
-            return new TreePlan(kind, immutableOrigin, List.copyOf(trunk), List.of(), false, false);
+        if (trunkKeys.size() <= 1) {
+            return new TreePlan(kind, immutableOrigin, toSortedPositions(trunkKeys), NO_POSITIONS, false, false);
         }
 
-        Set<BlockPos> trunkSet = new HashSet<>(trunk);
-        FoliageResult foliage = scanFoliage(level, kind, trunk, trunkSet);
-        return new TreePlan(kind, immutableOrigin, List.copyOf(trunk), foliage.positions(),
+        // Foliage data is only needed for the leaf threshold or for removal.
+        boolean needFoliage = TreeCapitatorConfig.minLeaves > 0
+                || (kind == TreeKind.MUSHROOM
+                        ? TreeCapitatorConfig.breakMushroomCaps
+                        : TreeCapitatorConfig.breakLeaves);
+        if (!needFoliage) {
+            return new TreePlan(kind, immutableOrigin, toSortedPositions(trunkKeys), NO_POSITIONS, false, false);
+        }
+
+        LongOpenHashSet trunkSet = new LongOpenHashSet(trunkKeys.size());
+        for (int i = 0; i < trunkKeys.size(); i++) {
+            trunkSet.add(trunkKeys.getLong(i));
+        }
+
+        FoliageResult foliage = scanFoliage(level, kind, trunkKeys, trunkSet);
+        BlockPos[] trunk = toSortedPositions(trunkKeys);
+
+        // Trees below the leaf threshold are rejected by the caller, so avoid
+        // materialising and sorting foliage that will never be used.
+        if (foliage.keys().size() < TreeCapitatorConfig.minLeaves) {
+            return new TreePlan(kind, immutableOrigin, trunk, NO_POSITIONS, foliage.truncated(), false);
+        }
+
+        return new TreePlan(kind, immutableOrigin, trunk, toSortedPositions(foliage.keys()),
                 foliage.truncated(), false);
     }
 
-    private static FoliageResult scanFoliage(ServerLevel level, TreeKind kind, List<BlockPos> trunk,
-            Set<BlockPos> trunkSet) {
+    private static FoliageResult scanFoliage(ServerLevel level, TreeKind kind, LongArrayList trunkKeys,
+            LongOpenHashSet trunkSet) {
         int radius = kind == TreeKind.MUSHROOM ? Integer.MAX_VALUE : TreeCapitatorConfig.leafRadius;
         int[][] neighbours = TreeCapitatorConfig.allowDiagonal ? ALL_NEIGHBOURS : FACE_NEIGHBOURS;
 
-        Set<BlockPos> visited = new HashSet<>();
-        Set<BlockPos> foliage = new HashSet<>();
-        ArrayDeque<FoliageNode> queue = new ArrayDeque<>();
+        LongOpenHashSet visited = new LongOpenHashSet();
+        LongArrayList foliage = new LongArrayList();
+        LongArrayList current = new LongArrayList();
+        LongArrayList next = new LongArrayList();
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
 
-        for (BlockPos trunkPos : trunk) {
+        // Seed the search from every block touching the trunk.
+        for (int i = 0; i < trunkKeys.size(); i++) {
+            long trunkKey = trunkKeys.getLong(i);
+            int x = BlockPos.getX(trunkKey);
+            int y = BlockPos.getY(trunkKey);
+            int z = BlockPos.getZ(trunkKey);
             for (int[] offset : neighbours) {
-                BlockPos candidate = trunkPos.offset(offset[0], offset[1], offset[2]);
-                if (trunkSet.contains(candidate) || !visited.add(candidate)) {
+                long key = cursor.set(x + offset[0], y + offset[1], z + offset[2]).asLong();
+                if (trunkSet.contains(key) || !visited.add(key)) {
                     continue;
                 }
-
-                BlockState state = getState(level, candidate);
-                if (state != null && isFoliage(state, kind)) {
-                    queue.add(new FoliageNode(candidate.immutable(), 1));
+                if (isFoliage(level.getBlockState(cursor), kind)) {
+                    current.add(key);
                 }
             }
         }
 
+        // Level-order BFS: distance grows by one per layer, so no per-node
+        // distance field is needed. Expansion stops at the configured radius.
         boolean truncated = false;
-        while (!queue.isEmpty()) {
-            FoliageNode node = queue.poll();
-            if (node.distance() > radius) {
-                continue;
+        for (int distance = 1; !current.isEmpty() && distance <= radius; distance++) {
+            for (int i = 0; i < current.size(); i++) {
+                long key = current.getLong(i);
+                foliage.add(key);
+                if (foliage.size() >= MAX_FOLIAGE) {
+                    truncated = true;
+                    break;
+                }
+
+                if (distance >= radius) {
+                    continue;
+                }
+
+                int x = BlockPos.getX(key);
+                int y = BlockPos.getY(key);
+                int z = BlockPos.getZ(key);
+                for (int[] offset : neighbours) {
+                    long nextKey = cursor.set(x + offset[0], y + offset[1], z + offset[2]).asLong();
+                    if (trunkSet.contains(nextKey) || !visited.add(nextKey)) {
+                        continue;
+                    }
+                    if (isFoliage(level.getBlockState(cursor), kind)) {
+                        next.add(nextKey);
+                    }
+                }
             }
 
-            BlockState state = getState(level, node.pos());
-            if (state == null || !isFoliage(state, kind)) {
-                continue;
-            }
-
-            foliage.add(node.pos());
-            if (foliage.size() >= MAX_FOLIAGE) {
-                truncated = true;
+            if (truncated) {
                 break;
             }
 
-            int nextDistance = node.distance() + 1;
-            if (nextDistance > radius) {
-                continue;
-            }
-
-            for (int[] offset : neighbours) {
-                BlockPos next = node.pos().offset(offset[0], offset[1], offset[2]);
-                if (trunkSet.contains(next) || !visited.add(next)) {
-                    continue;
-                }
-
-                BlockState nextState = getState(level, next);
-                if (nextState != null && isFoliage(nextState, kind)) {
-                    queue.add(new FoliageNode(next.immutable(), nextDistance));
-                }
-            }
+            LongArrayList swap = current;
+            current = next;
+            next = swap;
+            next.clear();
         }
 
-        List<BlockPos> sorted = new ArrayList<>(foliage);
-        sorted.sort(Comparator.comparingInt((BlockPos pos) -> pos.getY())
-                .thenComparingInt((BlockPos pos) -> pos.getX())
-                .thenComparingInt((BlockPos pos) -> pos.getZ()));
-        return new FoliageResult(List.copyOf(sorted), truncated);
+        return new FoliageResult(foliage, truncated);
     }
 
-    private static BlockState getState(ServerLevel level, BlockPos pos) {
-        if (!level.isInWorldBounds(pos) || !level.isLoaded(pos)) {
-            return null;
+    private static BlockPos[] toSortedPositions(LongArrayList keys) {
+        BlockPos[] positions = new BlockPos[keys.size()];
+        for (int i = 0; i < positions.length; i++) {
+            positions[i] = BlockPos.of(keys.getLong(i));
         }
-        return level.getBlockState(pos);
+        Arrays.sort(positions, TreePlan.BOTTOM_UP);
+        return positions;
     }
 
     private static int[][] buildNeighbours(boolean includeDiagonal) {
-        List<int[]> offsets = new ArrayList<>();
+        List<int[]> result = new ArrayList<>();
         for (int y = -1; y <= 1; y++) {
             for (int x = -1; x <= 1; x++) {
                 for (int z = -1; z <= 1; z++) {
@@ -199,16 +237,13 @@ public final class TreeScanner {
                     if (nonZero == 0 || (!includeDiagonal && nonZero != 1)) {
                         continue;
                     }
-                    offsets.add(new int[] { x, y, z });
+                    result.add(new int[] { x, y, z });
                 }
             }
         }
-        return offsets.toArray(int[][]::new);
+        return result.toArray(int[][]::new);
     }
 
-    private record FoliageNode(BlockPos pos, int distance) {
-    }
-
-    private record FoliageResult(List<BlockPos> positions, boolean truncated) {
+    private record FoliageResult(LongArrayList keys, boolean truncated) {
     }
 }

@@ -1,5 +1,6 @@
 package com.treecapitator;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -15,10 +16,16 @@ import net.minecraft.world.level.storage.LevelResource;
 
 /**
  * Per-player opt-out list stored inside the world folder.
+ *
+ * <p>The world file is loaded lazily once per server instance. The hot path
+ * only compares the current server reference and does one hash lookup, so
+ * breaking a block does not touch the filesystem or allocate a {@link Path}.</p>
  */
 public final class TreeCapitatorPreferences {
     private static final String FILE_NAME = "treecapitator_disabled.txt";
     private static final Set<UUID> DISABLED = new HashSet<>();
+
+    private static MinecraftServer loadedServer;
     private static Path loadedPath;
 
     private TreeCapitatorPreferences() {
@@ -42,11 +49,12 @@ public final class TreeCapitatorPreferences {
     }
 
     private static void ensureLoaded(MinecraftServer server) {
-        Path path = server.getWorldPath(LevelResource.ROOT).resolve(FILE_NAME);
-        if (path.equals(loadedPath)) {
+        if (server == loadedServer) {
             return;
         }
 
+        loadedServer = server;
+        Path path = server.getWorldPath(LevelResource.ROOT).resolve(FILE_NAME);
         loadedPath = path;
         DISABLED.clear();
 
@@ -54,8 +62,9 @@ public final class TreeCapitatorPreferences {
             return;
         }
 
-        try {
-            for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
+        try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
                 String value = line.trim();
                 if (value.isEmpty()) {
                     continue;

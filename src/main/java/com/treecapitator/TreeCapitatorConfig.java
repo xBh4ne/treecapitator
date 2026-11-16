@@ -12,6 +12,10 @@ import net.fabricmc.loader.api.FabricLoader;
 /**
  * Reads config/treecapitator.properties. Invalid values are replaced with the
  * documented defaults and reported in the server log.
+ *
+ * <p>Values are loaded once during mod initialisation, before the server thread
+ * starts, and then only read. Plain fields avoid the memory barriers of
+ * {@code volatile} on hot paths such as the scanner loops.</p>
  */
 public final class TreeCapitatorConfig {
     public static final int DEFAULT_MAX_LOGS = 256;
@@ -25,16 +29,19 @@ public final class TreeCapitatorConfig {
     public static final boolean DEFAULT_ALLOW_DIAGONAL = true;
     public static final int DEFAULT_BREAK_DELAY_MS = 0;
 
-    public static volatile int maxLogs = DEFAULT_MAX_LOGS;
-    public static volatile boolean requireAxe = DEFAULT_REQUIRE_AXE;
-    public static volatile boolean sneakDisables = DEFAULT_SNEAK_DISABLES;
-    public static volatile boolean breakLeaves = DEFAULT_BREAK_LEAVES;
-    public static volatile int leafRadius = DEFAULT_LEAF_RADIUS;
-    public static volatile int minLeaves = DEFAULT_MIN_LEAVES;
-    public static volatile boolean includeMushrooms = DEFAULT_INCLUDE_MUSHROOMS;
-    public static volatile boolean breakMushroomCaps = DEFAULT_BREAK_MUSHROOM_CAPS;
-    public static volatile boolean allowDiagonal = DEFAULT_ALLOW_DIAGONAL;
-    public static volatile int breakDelayMs = DEFAULT_BREAK_DELAY_MS;
+    public static int maxLogs = DEFAULT_MAX_LOGS;
+    public static boolean requireAxe = DEFAULT_REQUIRE_AXE;
+    public static boolean sneakDisables = DEFAULT_SNEAK_DISABLES;
+    public static boolean breakLeaves = DEFAULT_BREAK_LEAVES;
+    public static int leafRadius = DEFAULT_LEAF_RADIUS;
+    public static int minLeaves = DEFAULT_MIN_LEAVES;
+    public static boolean includeMushrooms = DEFAULT_INCLUDE_MUSHROOMS;
+    public static boolean breakMushroomCaps = DEFAULT_BREAK_MUSHROOM_CAPS;
+    public static boolean allowDiagonal = DEFAULT_ALLOW_DIAGONAL;
+    public static int breakDelayMs = DEFAULT_BREAK_DELAY_MS;
+
+    /** {@code break-delay-ms} converted to ticks once, instead of per break. */
+    public static int breakDelayTicks = 1;
 
     private static final String FILE_NAME = "treecapitator.properties";
     private static final String DEFAULT_FILE = """
@@ -108,6 +115,7 @@ public final class TreeCapitatorConfig {
         breakMushroomCaps = readBoolean(properties, "break-mushroom-caps", DEFAULT_BREAK_MUSHROOM_CAPS);
         allowDiagonal = readBoolean(properties, "allow-diagonal", DEFAULT_ALLOW_DIAGONAL);
         breakDelayMs = readInt(properties, "break-delay-ms", DEFAULT_BREAK_DELAY_MS, 0, 60000);
+        breakDelayTicks = toTicks(breakDelayMs);
     }
 
     private static void applyDefaults() {
@@ -121,6 +129,14 @@ public final class TreeCapitatorConfig {
         breakMushroomCaps = DEFAULT_BREAK_MUSHROOM_CAPS;
         allowDiagonal = DEFAULT_ALLOW_DIAGONAL;
         breakDelayMs = DEFAULT_BREAK_DELAY_MS;
+        breakDelayTicks = toTicks(DEFAULT_BREAK_DELAY_MS);
+    }
+
+    private static int toTicks(int milliseconds) {
+        if (milliseconds <= 0) {
+            return 1;
+        }
+        return Math.max(1, (milliseconds + 49) / 50);
     }
 
     private static int readInt(Properties properties, String key, int defaultValue, int minimum, int maximum) {

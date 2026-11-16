@@ -1,10 +1,6 @@
 package com.treecapitator;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.PriorityQueue;
-import java.util.Queue;
+import java.util.ArrayDeque;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -26,171 +22,200 @@ import net.minecraft.world.level.block.state.BlockState;
  * normal vanilla speed. Additional trunk blocks are removed through
  * {@link ServerPlayerGameMode#destroyBlock} (via the player's game mode) so loot
  * tables, Fortune, Silk Touch, tool damage and Unbreaking all follow vanilla
- * behaviour. A thread-local guard prevents the resulting break events from
- * starting another felling.</p>
+ * behaviour. A boolean guard prevents the resulting break events from starting
+ * another felling.</p>
+ *
+ * <p>Work is spread over server ticks by a single FIFO queue. Each felling
+ * keeps its own cursor, so there is one small job object per tree instead of
+ * one scheduled task (and one lambda) per block. Leaves and mushroom caps are
+ * removed in small batches per tick, which keeps large canopies from causing a
+ * single-tick spike.</p>
  */
 public final class TreeCapitatorHandler {
-    private static final ThreadLocal<Boolean> FELLING = ThreadLocal.withInitial(() -> false);
-    private static final Queue<PendingStep> PENDING_STEPS =
-            new PriorityQueue<>(Comparator.comparingLong(PendingStep::readyTick));
+    private static final int FOLIAGE_PER_TICK = 128;
+    private static final ArrayDeque<FellingJob> JOBS = new ArrayDeque<>();
+
+    /**
+     * True while the handler itself is destroying a block. Everything runs on
+     * the server thread, so a plain field is enough; no boxed ThreadLocal.
+     */
+    private static boolean felling;
 
     private TreeCapitatorHandler() {
     }
 
     public static void register() {
         ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (JOBS.isEmpty()) {
+                return;
+            }
+
             long now = server.getTickCount();
-            while (!PENDING_STEPS.isEmpty() && PENDING_STEPS.peek().readyTick() <= now) {
-                PendingStep step = PENDING_STEPS.poll();
+            // Jobs always become ready in queue order, so the head is the only
+            // candidate. The budget also protects against a job rescheduling
+            // itself for the same tick.
+            int budget = JOBS.size();
+            while (budget-- > 0) {
+                FellingJob job = JOBS.peek();
+                if (job == null || job.readyTick > now) {
+                    break;
+                }
+
+                JOBS.poll();
                 try {
-                    step.action().run();
+                    job.step(now);
                 } catch (RuntimeException exception) {
                     TreeCapitatorMod.LOGGER.error("Could not finish felling a tree", exception);
                 }
             }
         });
 
-        ServerLifecycleEvents.SERVER_STOPPED.register(server -> PENDING_STEPS.clear());
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> JOBS.clear());
     }
 
     public static void afterBlockBreak(Level level, Player player, BlockPos pos, BlockState state,
             BlockEntity blockEntity) {
-        if (FELLING.get()) {
-            return;
-        }
-        if (!(level instanceof ServerLevel serverLevel) || !(player instanceof ServerPlayer serverPlayer)) {
-            return;
-        }
-        if (!isEligible(serverPlayer, serverLevel, state)) {
+        if (felling || !(level instanceof ServerLevel serverLevel)
+                || !(player instanceof ServerPlayer serverPlayer)) {
             return;
         }
 
-        TreePlan plan = TreeScanner.scan(serverLevel, pos, state);
+        // Cheap checks first: the break event fires for every block in the world.
+        TreeKind kind = eligibleKind(serverPlayer, state);
+        if (kind == null) {
+            return;
+        }
+
+        TreePlan plan = TreeScanner.scan(serverLevel, pos, state, kind);
         if (plan == null || plan.tooLarge() || plan.trunkCount() <= 1
                 || !plan.hasEnoughFoliage(TreeCapitatorConfig.minLeaves)) {
             return;
         }
 
-        List<BlockPos> trunkPositions = new ArrayList<>();
-        for (BlockPos trunkPos : plan.trunk()) {
-            if (!trunkPos.equals(plan.origin())) {
-                trunkPositions.add(trunkPos);
-            }
-        }
-        if (trunkPositions.isEmpty()) {
-            breakFoliage(serverPlayer, serverLevel, plan);
-            return;
-        }
-
-        long readyTick = serverLevel.getServer().getTickCount();
-        PENDING_STEPS.add(new PendingStep(readyTick,
-                () -> fellNextTrunk(serverPlayer, serverLevel, plan, trunkPositions, 0)));
+        FellingJob job = new FellingJob(serverPlayer, serverLevel, plan);
+        job.readyTick = serverLevel.getServer().getTickCount();
+        JOBS.add(job);
     }
 
-    private static boolean isEligible(ServerPlayer player, ServerLevel level, BlockState state) {
-        if (player.isSpectator() || !TreeCapitatorPreferences.isEnabled(player)) {
-            return false;
+    private static TreeKind eligibleKind(ServerPlayer player, BlockState state) {
+        if (player.isSpectator()) {
+            return null;
         }
         if (TreeCapitatorConfig.sneakDisables && player.isShiftKeyDown()) {
-            return false;
+            return null;
         }
-        if (TreeScanner.kindOf(state) == null) {
-            return false;
+
+        TreeKind kind = TreeScanner.kindOf(state);
+        if (kind == null) {
+            return null;
         }
-        ItemStack tool = player.getMainHandItem();
-        return !TreeCapitatorConfig.requireAxe || tool.is(ItemTags.AXES);
+        if (TreeCapitatorConfig.requireAxe && !player.getMainHandItem().is(ItemTags.AXES)) {
+            return null;
+        }
+
+        return TreeCapitatorPreferences.isEnabled(player) ? kind : null;
     }
 
     /**
-     * Breaks one additional trunk block and schedules the next one. Waiting at
-     * least one tick between blocks keeps a large tree from being removed in a
-     * single server tick and makes {@code break-delay-ms} behave as documented.
+     * One felling in progress. Holds the plan and two cursors, so a tree of any
+     * size only needs this single object for its whole lifetime.
      */
-    private static void fellNextTrunk(ServerPlayer player, ServerLevel level, TreePlan plan,
-            List<BlockPos> trunkPositions, int index) {
-        if (player.isRemoved() || player.level() != level || !player.isAlive() || player.isSpectator()) {
-            return;
+    private static final class FellingJob {
+        private final ServerPlayer player;
+        private final ServerLevel level;
+        private final TreePlan plan;
+        private final BlockPos[] trunk;
+        private final BlockPos[] foliage;
+        private final long breakDelayTicks;
+        private int trunkIndex;
+        private int foliageIndex;
+        private long readyTick;
+
+        private FellingJob(ServerPlayer player, ServerLevel level, TreePlan plan) {
+            this.player = player;
+            this.level = level;
+            this.plan = plan;
+            this.trunk = plan.trunk();
+            this.foliage = plan.foliage();
+            this.breakDelayTicks = TreeCapitatorConfig.breakDelayTicks;
         }
 
-        while (index < trunkPositions.size()) {
-            if (TreeCapitatorConfig.requireAxe) {
-                ItemStack tool = player.getMainHandItem();
-                if (tool.isEmpty() || !tool.is(ItemTags.AXES)) {
+        private void step(long now) {
+            if (player.isRemoved() || player.level() != level || !player.isAlive() || player.isSpectator()) {
+                return;
+            }
+
+            // Break at most one trunk block per step; the next one is scheduled
+            // for a later tick to avoid removing a large tree in one tick.
+            while (trunkIndex < trunk.length) {
+                BlockPos pos = trunk[trunkIndex++];
+                if (pos.equals(plan.origin())) {
+                    continue;
+                }
+                if (TreeCapitatorConfig.requireAxe) {
+                    ItemStack tool = player.getMainHandItem();
+                    if (tool.isEmpty() || !tool.is(ItemTags.AXES)) {
+                        return;
+                    }
+                }
+                if (!TreeScanner.isTrunk(level.getBlockState(pos), plan.kind())) {
+                    continue;
+                }
+                if (!level.mayInteract(player, pos)) {
                     return;
                 }
+
+                boolean broken;
+                felling = true;
+                try {
+                    broken = player.gameMode.destroyBlock(pos);
+                } finally {
+                    felling = false;
+                }
+                if (!broken) {
+                    return;
+                }
+
+                if (trunkIndex < trunk.length) {
+                    schedule(now + breakDelayTicks);
+                    return;
+                }
+                break;
             }
 
-            BlockPos pos = trunkPositions.get(index);
-            BlockState current = level.getBlockState(pos);
-            if (!TreeScanner.isTrunk(current, plan.kind())) {
-                index++;
-                continue;
-            }
-            if (!level.mayInteract(player, pos)) {
+            removeFoliageBatch(now);
+        }
+
+        private void removeFoliageBatch(long now) {
+            boolean enabled = plan.kind() == TreeKind.MUSHROOM
+                    ? TreeCapitatorConfig.breakMushroomCaps
+                    : TreeCapitatorConfig.breakLeaves;
+            if (!enabled || plan.foliageTruncated()) {
                 return;
             }
 
-            boolean broken;
-            FELLING.set(true);
-            try {
-                broken = player.gameMode.destroyBlock(pos);
-            } finally {
-                FELLING.set(false);
-            }
-            if (!broken) {
-                return;
-            }
+            int processed = 0;
+            while (foliageIndex < foliage.length) {
+                if (processed++ >= FOLIAGE_PER_TICK) {
+                    schedule(now + 1);
+                    return;
+                }
 
-            int nextIndex = index + 1;
-            if (nextIndex >= trunkPositions.size()) {
-                breakFoliage(player, level, plan);
-                return;
+                BlockPos pos = foliage[foliageIndex++];
+                // Leaves and caps are removed without drops, matching natural decay.
+                if (!TreeScanner.isFoliage(level.getBlockState(pos), plan.kind())) {
+                    continue;
+                }
+                if (!level.mayInteract(player, pos)) {
+                    continue;
+                }
+                level.destroyBlock(pos, false);
             }
-
-            long readyTick = level.getServer().getTickCount() + breakDelayTicks();
-            PENDING_STEPS.add(new PendingStep(readyTick,
-                    () -> fellNextTrunk(player, level, plan, trunkPositions, nextIndex)));
-            return;
         }
 
-        // Every remaining position was already empty or no longer part of the trunk.
-        breakFoliage(player, level, plan);
-    }
-
-    private static int breakDelayTicks() {
-        if (TreeCapitatorConfig.breakDelayMs <= 0) {
-            return 1;
+        private void schedule(long tick) {
+            readyTick = tick;
+            JOBS.add(this);
         }
-        return Math.max(1, (TreeCapitatorConfig.breakDelayMs + 49) / 50);
-    }
-
-    private static void breakFoliage(ServerPlayer player, ServerLevel level, TreePlan plan) {
-        boolean enabled = plan.kind() == TreeKind.MUSHROOM
-                ? TreeCapitatorConfig.breakMushroomCaps
-                : TreeCapitatorConfig.breakLeaves;
-
-        if (!enabled || plan.foliageTruncated()) {
-            return;
-        }
-
-        for (BlockPos pos : plan.foliage()) {
-            if (!level.isLoaded(pos)) {
-                continue;
-            }
-
-            BlockState state = level.getBlockState(pos);
-            if (!TreeScanner.isFoliage(state, plan.kind())) {
-                continue;
-            }
-            if (!level.mayInteract(player, pos)) {
-                continue;
-            }
-
-            // Leaves and caps are removed without drops, matching natural decay.
-            level.destroyBlock(pos, false);
-        }
-    }
-
-    private record PendingStep(long readyTick, Runnable action) {
     }
 }
